@@ -11,7 +11,9 @@ from .models import User
 
 SECRET_KEY = os.getenv("SECRET_KEY", "oasense_ai_secure_development_secret_key_2026")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
+DEMO_USER_EMAIL = os.getenv("DEMO_USER_EMAIL", "demo@oasense.ai")
+DEMO_USER_PASSWORD = os.getenv("DEMO_USER_PASSWORD", "demo123")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
@@ -37,7 +39,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 
 def get_current_user(token: Optional[str] = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> Optional[User]:
     if not token:
-        demo_user = db.query(User).filter(User.email == "demo@oasense.ai").first()
+        demo_user = db.query(User).filter(User.email == DEMO_USER_EMAIL).first()
         if demo_user:
             return demo_user
         raise HTTPException(
@@ -66,22 +68,21 @@ def get_current_user(token: Optional[str] = Depends(oauth2_scheme), db: Session 
 
 def seed_demo_user(db: Session):
     """Seed the default demo healthcare worker account if it doesn't already exist."""
-    demo_email = "demo@oasense.ai"
-    existing = db.query(User).filter(User.email == demo_email).first()
+    existing = db.query(User).filter(User.email == DEMO_USER_EMAIL).first()
     if not existing:
         demo_user = User(
             name="Dr. Sarah Mitchell",
-            email=demo_email,
-            password_hash=get_password_hash("demo123"),
+            email=DEMO_USER_EMAIL,
+            password_hash=get_password_hash(DEMO_USER_PASSWORD),
             role="healthcare_worker",
             created_at=datetime.utcnow()
         )
         db.add(demo_user)
         db.commit()
         db.refresh(demo_user)
-        print(f"[AUTH] Seeded demo user account: {demo_email}")
+        print(f"[AUTH] Seeded demo user account: {DEMO_USER_EMAIL}")
     else:
         # Update hash if needed
-        if not verify_password("demo123", existing.password_hash):
-            existing.password_hash = get_password_hash("demo123")
+        if not verify_password(DEMO_USER_PASSWORD, existing.password_hash):
+            existing.password_hash = get_password_hash(DEMO_USER_PASSWORD)
             db.commit()
