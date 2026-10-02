@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    container_name: oasense-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:///./data/oasense.db
+      - SECRET_KEY=oasense_production_secret_key_change_me
+    volumes:
+      - ./backend/data:/app/data
+      - ./backend/reports:/app/reports
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: oasense-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
