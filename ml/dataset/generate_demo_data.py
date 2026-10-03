@@ -36,10 +36,12 @@ def generate_synthetic_dataset(n_samples: int = 2000, random_seed: int = 42) -> 
     )
     latent_risk = np.clip(latent_risk, 0.0, 1.0)
     
-    # Discretize latent risk into 3 classes: 0 = Low Risk, 1 = Moderate Risk, 2 = High Risk
+    # Discretize latent risk into 3 balanced classes: 0 = Low Risk, 1 = Moderate Risk, 2 = High Risk
     risk_levels = np.zeros(n_samples, dtype=int)
-    risk_levels[latent_risk >= 0.38] = 1
-    risk_levels[latent_risk >= 0.68] = 2
+    threshold_mod = np.quantile(latent_risk, 0.33)
+    threshold_high = np.quantile(latent_risk, 0.67)
+    risk_levels[latent_risk >= threshold_mod] = 1
+    risk_levels[latent_risk >= threshold_high] = 2
     
     # Questionnaire responses driven by latent risk + clinical noise
     pain_scores = np.clip(latent_risk * 9.5 + np.random.normal(0, 1.0, n_samples), 0, 10).round(1)

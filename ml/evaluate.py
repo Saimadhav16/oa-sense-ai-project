@@ -51,18 +51,23 @@ def run_diagnostics():
     pipe = bundle["pipeline"]
     print(f"Loaded Model: {bundle.get('model_name', 'Unknown')} (v{bundle.get('version')})")
 
+    from sklearn.model_selection import train_test_split
     df = pd.read_csv(dataset_path)
     X = df[FEATURE_COLUMNS]
     y = df[TARGET_COLUMN]
 
-    preds = pipe.predict(X)
+    _, X_test, _, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=42, stratify=y
+    )
+
+    preds = pipe.predict(X_test)
     target_names = ["Low Risk", "Moderate Risk", "High Risk"]
     
-    print("\nOverall Classification Report:")
-    print(classification_report(y, preds, target_names=target_names))
+    print("\nOverall Classification Report (Test Set):")
+    print(classification_report(y_test, preds, target_names=target_names))
 
-    print("Confusion Matrix:")
-    print(confusion_matrix(y, preds))
+    print("Confusion Matrix (Test Set):")
+    print(confusion_matrix(y_test, preds))
 
     print("\nTop 5 Explainable Risk Factors (Feature Importances):")
     sorted_importances = sorted(

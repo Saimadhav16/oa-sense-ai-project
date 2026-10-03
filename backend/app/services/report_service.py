@@ -209,7 +209,7 @@ def generate_pdf_report(
         [
             Paragraph("<b>Metric</b>", bold_label),
             Paragraph("<b>Value</b>", bold_label),
-            Paragraph("<b>Reference Baseline</b>", bold_label),
+            Paragraph("<b>Prototype Reference</b>", bold_label),
             Paragraph("<b>Observation</b>", bold_label)
         ],
         [
@@ -329,9 +329,8 @@ def generate_pdf_report(
         [
             Paragraph(
                 "<b>IMPORTANT MEDICAL DISCLAIMER:</b><br/>"
-                "This report provides a preliminary AI-assisted screening assessment and is strictly NOT a medical diagnosis. "
-                "Never rely solely on this automated assessment for clinical decisions. Definitive osteoarthritis diagnosis "
-                "requires physical examination, patient history, and radiographic confirmation (X-ray/MRI) performed by a qualified healthcare professional.",
+                "Prototype screening result. This system is intended for preliminary risk screening and is not a medical diagnosis or a replacement for professional clinical evaluation or medical imaging. "
+                "DEMO MODEL — TRAINED/TESTED USING SYNTHETIC DATA — NOT FOR CLINICAL USE.",
                 disclaimer_text
             )
         ]

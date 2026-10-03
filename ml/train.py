@@ -18,7 +18,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
@@ -28,6 +28,7 @@ from sklearn.metrics import (
     classification_report,
     confusion_matrix
 )
+from xgboost import XGBClassifier
 
 # Import dataset generator
 from dataset.generate_demo_data import generate_synthetic_dataset
@@ -80,7 +81,7 @@ def train_and_evaluate():
     models = {
         "LogisticRegression": LogisticRegression(max_iter=1000, random_state=42),
         "RandomForest": RandomForestClassifier(n_estimators=150, max_depth=8, random_state=42),
-        "GradientBoosting": GradientBoostingClassifier(n_estimators=120, max_depth=5, learning_rate=0.08, random_state=42)
+        "XGBoost": XGBClassifier(n_estimators=120, max_depth=5, learning_rate=0.08, random_state=42)
     }
 
     results = {}
