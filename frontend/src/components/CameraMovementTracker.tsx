@@ -4,17 +4,21 @@ import { MovementSummary, MovementFrameData } from '../types';
 import { useTranslation } from '../utils/i18n';
 import { Pose, Results, POSE_CONNECTIONS } from '@mediapipe/pose';
 import { Camera as MediaPipeCamera } from '@mediapipe/camera_utils';
+import { MovementSignalProcessor } from '../utils/movementSignalProcessor';
 
 export type MovementState = 
   | 'KNEE_FLEXION_READY'
   | 'KNEE_FLEXION_RUNNING'
   | 'KNEE_FLEXION_COMPLETED'
+  | 'KNEE_FLEXION_INCOMPLETE'
   | 'SIT_TO_STAND_READY'
   | 'SIT_TO_STAND_RUNNING'
   | 'SIT_TO_STAND_COMPLETED'
+  | 'SIT_TO_STAND_INCOMPLETE'
   | 'WALKING_READY'
   | 'WALKING_RUNNING'
   | 'WALKING_COMPLETED'
+  | 'WALKING_INCOMPLETE'
   | 'FINAL_RESULT';
 
 interface CameraMovementTrackerProps {
@@ -40,6 +44,10 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
   const countdownTimerRef = useRef<any>(null);
   const progressTimerRef = useRef<any>(null);
 
+  // Test-level validation failure feedback
+  const [testIncompleteReason, setTestIncompleteReason] = useState<string | null>(null);
+  const [testPassMessage, setTestPassMessage] = useState<string | null>(null);
+
   // Sit-to-Stand repetition & phase tracking state
   const [sitToStandReps, setSitToStandReps] = useState<number>(0);
   const sitToStandRepsRef = useRef<number>(0);
@@ -54,6 +62,11 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
     movementStateRef.current = nextState;
     setMovementState(nextState);
 
+    // Reset feedback when moving to a running test
+    if (nextState.endsWith('_RUNNING')) {
+      setTestIncompleteReason(null);
+    }
+
     if (nextState === 'SIT_TO_STAND_READY') {
       console.log('[MovementState] SIT_TO_STAND waiting for user start');
       // Reset only temporary Sit-to-Stand data
@@ -64,17 +77,11 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
       sitToStandStartedRef.current = false;
       sitToStandCompletedRef.current = false;
       test2Stats.current = { valid: 0, total: 0, confSum: 0 };
-      setPalmGestureDetected(false);
-      gestureTriggeredRef.current = false;
-      palmHoldFrames.current = 0;
       setTestProgress(0);
     } else if (nextState === 'WALKING_READY') {
       console.log('[MovementState] WALKING waiting for user start');
       test3Frames.current = [];
       test3Stats.current = { valid: 0, total: 0, confSum: 0 };
-      setPalmGestureDetected(false);
-      gestureTriggeredRef.current = false;
-      palmHoldFrames.current = 0;
       setTestProgress(0);
     }
   };
@@ -94,6 +101,12 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
   const [landmarkQualityScore, setLandmarkQualityScore] = useState<number>(100);
   const [lowerBodyVisible, setLowerBodyVisible] = useState<boolean>(true);
   const [framingStatus, setFramingStatus] = useState<string>('Optimal Framing');
+  const [currentPhase, setCurrentPhase] = useState<string>('stationary');
+  const [debugMode, setDebugMode] = useState<boolean>(true);
+  const [outlierWarning, setOutlierWarning] = useState<boolean>(false);
+
+  // Robust Movement Signal Processor instance
+  const signalProcessor = useRef<MovementSignalProcessor>(new MovementSignalProcessor());
 
   // Landmark Tracking & Stability Accumulator Refs
   const totalSessionFrames = useRef<number>(0);
@@ -118,9 +131,6 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
   const test1Frames = useRef<MovementFrameData[]>([]);
   const test2Frames = useRef<MovementFrameData[]>([]);
   const test3Frames = useRef<MovementFrameData[]>([]);
-  const [palmGestureDetected, setPalmGestureDetected] = useState<boolean>(false);
-  const palmHoldFrames = useRef<number>(0);
-  const gestureTriggeredRef = useRef<boolean>(false);
 
   // Per-test stats refs
   const test1Stats = useRef<{ valid: number; total: number; confSum: number }>({ valid: 0, total: 0, confSum: 0 });
@@ -201,6 +211,10 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
       setPoseDetected(true);
       const lm = results.poseLandmarks;
       
+      // Process frame through robust MovementSignalProcessor
+      const processed = signalProcessor.current.processFrame(lm, width, height, now);
+      const framing = signalProcessor.current.getFramingEvaluation();
+
       const toCoords = (index: number) => {
          return { 
            x: lm[index].x * width, 
@@ -211,27 +225,25 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
          };
       };
       
-      const l_shoulder = toCoords(11);
-      const r_shoulder = toCoords(12);
-      const l_wrist = toCoords(15);
-      const r_wrist = toCoords(16);
-      const l_pinky = lm.length > 17 ? toCoords(17) : null;
-      const r_pinky = lm.length > 18 ? toCoords(18) : null;
-      const l_index = lm.length > 19 ? toCoords(19) : null;
-      const r_index = lm.length > 20 ? toCoords(20) : null;
-      const l_hip = toCoords(23);
-      const r_hip = toCoords(24);
-      const l_knee = toCoords(25);
-      const r_knee = toCoords(26);
-      const l_ankle = toCoords(27);
-      const r_ankle = toCoords(28);
-      const l_heel = lm.length > 29 ? toCoords(29) : null;
-      const r_heel = lm.length > 30 ? toCoords(30) : null;
-      const l_foot = lm.length > 31 ? toCoords(31) : null;
-      const r_foot = lm.length > 32 ? toCoords(32) : null;
+      const l_shoulder = processed.landmarks.l_shoulder;
+      const r_shoulder = processed.landmarks.r_shoulder;
+      const l_elbow = lm.length > 13 ? toCoords(13) : null;
+      const r_elbow = lm.length > 14 ? toCoords(14) : null;
+      const l_wrist = lm.length > 15 ? toCoords(15) : null;
+      const r_wrist = lm.length > 16 ? toCoords(16) : null;
+      const l_hip = processed.landmarks.l_hip;
+      const r_hip = processed.landmarks.r_hip;
+      const l_knee = processed.landmarks.l_knee;
+      const r_knee = processed.landmarks.r_knee;
+      const l_ankle = processed.landmarks.l_ankle;
+      const r_ankle = processed.landmarks.r_ankle;
+      const l_heel = processed.landmarks.l_heel;
+      const r_heel = processed.landmarks.r_heel;
+      const l_foot = processed.landmarks.l_foot;
+      const r_foot = processed.landmarks.r_foot;
 
-      // --- PHASE 2 FULL-BODY LANDMARK VALIDATION ---
-      const VISIBILITY_THRESH = 0.55;
+      // Landmark visibility status
+      const VISIBILITY_THRESH = 0.50;
       const shouldersOk = (l_shoulder.v >= VISIBILITY_THRESH) && (r_shoulder.v >= VISIBILITY_THRESH);
       const hipsOk = (l_hip.v >= VISIBILITY_THRESH) && (r_hip.v >= VISIBILITY_THRESH);
       const lKneeOk = l_knee.v >= VISIBILITY_THRESH;
@@ -243,22 +255,21 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
       const lowerBodyOk = kneesOk && anklesOk;
       setLowerBodyVisible(lowerBodyOk);
 
-      // Body Framing Check (normalized coords in view bounds)
+      // Body Framing Check
       const keypointsToCheck = [l_shoulder, r_shoulder, l_hip, r_hip, l_knee, r_knee, l_ankle, r_ankle];
       let outOfBounds = false;
       let tooClose = false;
       for (const pt of keypointsToCheck) {
-        if (pt.normX < 0.05 || pt.normX > 0.95 || pt.normY < 0.04 || pt.normY > 0.98) {
+        if (pt.normX < 0.04 || pt.normX > 0.96 || pt.normY < 0.04 || pt.normY > 0.98) {
           outOfBounds = true;
         }
       }
-      // If torso height takes > 85% of screen, user is too close
       const torsoHeight = Math.abs(l_hip.normY - l_shoulder.normY);
       if (torsoHeight > 0.65) {
         tooClose = true;
       }
 
-      // Temporal Stability / Jitter Check
+      // Temporal Jitter / Displacement Check
       let frameJitter = 0;
       if (previousKeypoints.current) {
         const pk = previousKeypoints.current;
@@ -273,7 +284,7 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
         r_knee: { x: r_knee.x, y: r_knee.y }
       };
 
-      // Mean landmark confidence for core joints
+      // Mean landmark confidence for lower body
       const coreConfidences = [
         l_shoulder.v, r_shoulder.v,
         l_hip.v, r_hip.v,
@@ -286,44 +297,12 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
       const frameConf = coreConfidences.reduce((a, b) => a + b, 0) / coreConfidences.length;
 
       // Evaluate per-frame validity
-      const isFrameValid = shouldersOk && hipsOk && kneesOk && anklesOk && !outOfBounds;
+      const isFrameValid = processed.isValid;
+      setOutlierWarning(processed.isOutlier);
+      setCurrentPhase(processed.phase);
 
-      // PART 2: Open Palm Gesture Recognition (✋)
-      // Palm raised: hand above shoulder level or chest level with visible wrist and fingers
-      let isPalmGesture = false;
-      const rHandRaised = (r_wrist.v >= 0.5 && r_wrist.y < r_shoulder.y + 30) && (r_index ? r_index.y < r_wrist.y : true);
-      const lHandRaised = (l_wrist.v >= 0.5 && l_wrist.y < l_shoulder.y + 30) && (l_index ? l_index.y < l_wrist.y : true);
-
-      if ((rHandRaised || lHandRaised) && shouldersOk && hipsOk && lowerBodyOk && !outOfBounds) {
-        isPalmGesture = true;
-      }
-
-      // Open Palm should ONLY start when in a READY state
+      // Check current real-time state directly via ref
       const currState = movementStateRef.current;
-      const isReadyToStart = (
-        currState === 'KNEE_FLEXION_READY' ||
-        currState === 'SIT_TO_STAND_READY' ||
-        currState === 'WALKING_READY'
-      );
-
-      if (isPalmGesture && isReadyToStart) {
-        palmHoldFrames.current += 1;
-        if (palmHoldFrames.current >= 8 && !gestureTriggeredRef.current) {
-          gestureTriggeredRef.current = true;
-          setPalmGestureDetected(true);
-          console.log(`[MovementState] ${currState.replace('_READY', '')} started by open palm`);
-          startCurrentMovementTest(currState);
-        }
-      } else {
-        if (!isPalmGesture) {
-          palmHoldFrames.current = Math.max(0, palmHoldFrames.current - 1);
-          if (isReadyToStart) {
-            setPalmGestureDetected(false);
-            gestureTriggeredRef.current = false;
-          }
-        }
-      }
-
       const isRunning = (
         currState === 'KNEE_FLEXION_RUNNING' ||
         currState === 'SIT_TO_STAND_RUNNING' ||
@@ -337,7 +316,6 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
         }
         landmarkConfidenceSum.current += frameConf;
 
-        // Update protocol-specific statistics strictly for currently active test
         if (currState === 'KNEE_FLEXION_RUNNING') {
           test1Stats.current.total += 1;
           if (isFrameValid) test1Stats.current.valid += 1;
@@ -353,9 +331,9 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
         }
       }
 
-      // Determine instant quality instruction
-      let instantInstruction: string | null = null;
-      let instantFraming = 'Optimal Framing';
+      // Guidance and framing status from processor
+      let instantInstruction = framing.userGuidance;
+      let instantFraming = framing.framingStatus;
       if (!rKneeOk && !lKneeOk) {
         instantInstruction = 'Both knees are not detected reliably. Please step back so knees are visible.';
         instantFraming = 'Knees Occluded';
@@ -392,17 +370,19 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
       const currentQualityScore = Math.round(frameConf * 100);
       setLandmarkQualityScore(currentQualityScore);
       
-      const leftAngle = calculateAngle(l_hip, l_knee, l_ankle);
-      const rightAngle = calculateAngle(r_hip, r_knee, r_ankle);
+      const leftAngle = processed.leftKneeAngle;
+      const rightAngle = processed.rightKneeAngle;
       
       setLeftKneeAngle(leftAngle);
       setRightKneeAngle(rightAngle);
       
       if (isRunning) {
-         minLeftAngle.current = Math.min(minLeftAngle.current, leftAngle);
-         maxLeftAngle.current = Math.max(maxLeftAngle.current, leftAngle);
-         minRightAngle.current = Math.min(minRightAngle.current, rightAngle);
-         maxRightAngle.current = Math.max(maxRightAngle.current, rightAngle);
+         if (isFrameValid) {
+           minLeftAngle.current = Math.min(minLeftAngle.current, leftAngle);
+           maxLeftAngle.current = Math.max(maxLeftAngle.current, leftAngle);
+           minRightAngle.current = Math.min(minRightAngle.current, rightAngle);
+           maxRightAngle.current = Math.max(maxRightAngle.current, rightAngle);
+         }
          
          let currentMovementType = 'KNEE_FLEXION';
          let activeBuffer = test1Frames.current;
@@ -414,23 +394,12 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
            activeBuffer = test3Frames.current;
          }
 
-         const lastFrame = activeBuffer.length > 0 ? activeBuffer[activeBuffer.length - 1] : null;
-         let currentPhase = 'stationary';
-         if (lastFrame) {
-           const dAngle = leftAngle - lastFrame.left_knee_angle;
-           if (dAngle < -2) currentPhase = 'flexion';
-           else if (dAngle > 2) currentPhase = 'extension';
-           else currentPhase = 'hold';
-         }
-
          // Real Sit-to-Stand repetition cycle detection
          if (currState === 'SIT_TO_STAND_RUNNING') {
            const avgKnee = (leftAngle + rightAngle) / 2;
            if (avgKnee < 115) {
-             // Deep flexion => sitting position
              sitToStandPhaseRef.current = 'sitting';
            } else if (avgKnee > 155 && sitToStandPhaseRef.current === 'sitting') {
-             // Rose up to extension => completed 1 repetition
              sitToStandPhaseRef.current = 'standing';
              sitToStandRepsRef.current += 1;
              setSitToStandReps(sitToStandRepsRef.current);
@@ -444,7 +413,7 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
            right_knee_angle: rightAngle,
            posture_value: postureScore,
            frame_valid: isFrameValid,
-           phase: currentPhase,
+           phase: processed.phase,
            movement_type: currentMovementType
          };
 
@@ -455,6 +424,7 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
       // Draw Skeleton with Quality-Aware Visual Feedback
       ctx.lineWidth = 4;
       const drawLine = (p1: any, p2: any, color: string) => {
+        if (!p1 || !p2) return;
         if (p1.v !== undefined && p1.v < 0.4) return;
         if (p2.v !== undefined && p2.v < 0.4) return;
         ctx.strokeStyle = color;
@@ -464,10 +434,11 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
         ctx.stroke();
       };
       const drawDot = (p: any, label?: string, isCritical?: boolean) => {
+        if (!p) return;
         const isGood = p.v >= VISIBILITY_THRESH;
         ctx.beginPath();
         ctx.arc(p.x, p.y, isCritical ? 7 : 5, 0, 2 * Math.PI);
-        ctx.fillStyle = isGood ? '#10b981' : '#f59e0b';
+        ctx.fillStyle = p.interpolated ? '#f59e0b' : (isGood ? '#10b981' : '#f87171');
         ctx.fill();
         ctx.lineWidth = 2;
         ctx.strokeStyle = isGood ? '#ffffff' : '#ef4444';
@@ -479,11 +450,22 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
         }
       };
       
+      // Torso & Arms
       drawLine(l_shoulder, r_shoulder, '#38bdf8');
       drawLine(l_shoulder, l_hip, '#38bdf8');
       drawLine(r_shoulder, r_hip, '#38bdf8');
       drawLine(l_hip, r_hip, '#38bdf8');
+
+      if (l_elbow && l_wrist) {
+        drawLine(l_shoulder, l_elbow, '#94a3b8');
+        drawLine(l_elbow, l_wrist, '#94a3b8');
+      }
+      if (r_elbow && r_wrist) {
+        drawLine(r_shoulder, r_elbow, '#94a3b8');
+        drawLine(r_elbow, r_wrist, '#94a3b8');
+      }
       
+      // Lower Extremities
       drawLine(l_hip, l_knee, lKneeOk ? '#14b8a6' : '#f87171');
       drawLine(l_knee, l_ankle, anklesOk ? '#14b8a6' : '#f87171');
       
@@ -512,14 +494,77 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
       drawDot(l_ankle, undefined, true);
       drawDot(r_ankle, undefined, true);
 
-      // Draw raised hand/palm indicator if detected
-      if (rHandRaised && r_index) {
-        drawDot(r_index, '✋ Palm', true);
-      } else if (lHandRaised && l_index) {
-        drawDot(l_index, '✋ Palm', true);
+      // Visual Debug Overlay when enabled
+      if (debugMode) {
+        // Render Raw MediaPipe Landmarks for side-by-side verification (raw ghost skeleton in orange/gray)
+        const raw = processed.rawLandmarks;
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(251, 146, 60, 0.45)';
+        ctx.beginPath();
+        ctx.moveTo(raw.l_hip.x, raw.l_hip.y);
+        ctx.lineTo(raw.l_knee.x, raw.l_knee.y);
+        ctx.lineTo(raw.l_ankle.x, raw.l_ankle.y);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(raw.r_hip.x, raw.r_hip.y);
+        ctx.lineTo(raw.r_knee.x, raw.r_knee.y);
+        ctx.lineTo(raw.r_ankle.x, raw.r_ankle.y);
+        ctx.stroke();
+
+        // Raw landmark dots
+        [raw.l_knee, raw.r_knee, raw.l_ankle, raw.r_ankle].forEach(pt => {
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, 3, 0, 2 * Math.PI);
+          ctx.fillStyle = 'rgba(251, 146, 60, 0.8)';
+          ctx.fill();
+        });
+
+        // Real-Time Movement Diagnostic Panel
+        const diag = signalProcessor.current.getLiveDiagnostics();
+        const lMin = Math.min(minLeftAngle.current, leftAngle);
+        const lMax = Math.max(maxLeftAngle.current, leftAngle);
+        const lRom = Math.max(0, lMax - lMin);
+        const rMin = Math.min(minRightAngle.current, rightAngle);
+        const rMax = Math.max(maxRightAngle.current, rightAngle);
+        const rRom = Math.max(0, rMax - rMin);
+
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
+        ctx.fillRect(8, 8, 330, 275);
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(8, 8, 330, 275);
+
+        ctx.font = 'bold 11px monospace';
+        ctx.fillStyle = '#38bdf8';
+        ctx.fillText('=== REAL-WEBCAM MOVEMENT DIAGNOSTIC ===', 16, 24);
+
+        ctx.fillStyle = '#2dd4bf';
+        ctx.fillText('LEFT KNEE:', 16, 42);
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillText(`Current: ${leftAngle}° (Raw: ${processed.rawLeftKneeAngle}°)`, 24, 58);
+        ctx.fillText(`Min: ${lMin === 180 ? leftAngle : lMin}° | Max: ${lMax === 0 ? leftAngle : lMax}°`, 24, 74);
+        ctx.fillText(`ROM: ${lRom}° | Excursion: ${diag.leftExcursion}°`, 24, 90);
+        ctx.fillText(`Phase: ${processed.leftPhase.toUpperCase()} | Dir: ${processed.leftMovementDirection.toUpperCase()}`, 24, 106);
+        ctx.fillText(`Completion: ${diag.leftExcursion >= diag.requiredExcursion && diag.leftReturn ? 'YES' : 'NO'}`, 24, 122);
+
+        ctx.fillStyle = '#22d3ee';
+        ctx.fillText('RIGHT KNEE:', 16, 142);
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillText(`Current: ${rightAngle}° (Raw: ${processed.rawRightKneeAngle}°)`, 24, 158);
+        ctx.fillText(`Min: ${rMin === 180 ? rightAngle : rMin}° | Max: ${rMax === 0 ? rightAngle : rMax}°`, 24, 174);
+        ctx.fillText(`ROM: ${rRom}° | Excursion: ${diag.rightExcursion}°`, 24, 190);
+        ctx.fillText(`Phase: ${processed.rightPhase.toUpperCase()} | Dir: ${processed.rightMovementDirection.toUpperCase()}`, 24, 206);
+        ctx.fillText(`Completion: ${diag.rightExcursion >= diag.requiredExcursion && diag.rightReturn ? 'YES' : 'NO'}`, 24, 222);
+
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillText(`Required Excursion: ${diag.requiredExcursion}°`, 16, 242);
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(`Valid Frames: ${diag.validFrames}/${diag.totalFrames} | Baseline L:${diag.leftBaseline}° R:${diag.rightBaseline}°`, 16, 258);
+        ctx.fillText(`[Orange Ghost = Raw | Cyan/Teal = Filtered]`, 16, 272);
       }
       
-      // Send telemetry
+      // Send telemetry via WebSocket
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && (isRunning || frameCounter.current % 3 === 0)) {
         try {
           wsRef.current.send(JSON.stringify({
@@ -546,7 +591,7 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
       setLandmarkQualityScore(0);
       setLowerBodyVisible(false);
     }
-  }, [postureScore]);
+  }, [postureScore, debugMode]);
 
   // Setup MediaPipe & Camera
   const startCamera = async () => {
@@ -613,28 +658,37 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
 
   // Explicit Movement Test Controls
   const startCurrentMovementTest = (fromState?: MovementState) => {
+    // If a countdown is already actively ticking, do not restart it
+    if (countdownTimerRef.current !== null) {
+      return;
+    }
+
     const active = fromState || movementStateRef.current;
     let targetRunningState: MovementState = 'KNEE_FLEXION_RUNNING';
 
-    if (active === 'SIT_TO_STAND_READY') {
+    if (active === 'SIT_TO_STAND_READY' || active === 'SIT_TO_STAND_INCOMPLETE') {
       targetRunningState = 'SIT_TO_STAND_RUNNING';
-    } else if (active === 'WALKING_READY') {
+    } else if (active === 'WALKING_READY' || active === 'WALKING_INCOMPLETE') {
       targetRunningState = 'WALKING_RUNNING';
-    } else if (active === 'KNEE_FLEXION_READY') {
+    } else if (active === 'KNEE_FLEXION_READY' || active === 'KNEE_FLEXION_INCOMPLETE') {
       targetRunningState = 'KNEE_FLEXION_RUNNING';
     } else {
       return;
     }
 
+    setTestIncompleteReason(null);
+    setTestPassMessage(null);
     setCountdown(3);
     setTestProgress(0);
 
-    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    console.log(`[MovementTest] Starting 3s get-ready countdown for ${targetRunningState}`);
+
     countdownTimerRef.current = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
           clearInterval(countdownTimerRef.current);
           countdownTimerRef.current = null;
+          console.log(`[MovementTest] Countdown complete → START MOVEMENT (${targetRunningState})`);
           startRecordingSession(targetRunningState);
           return 0;
         }
@@ -649,6 +703,11 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
     maxLeftAngle.current = 0;
     minRightAngle.current = 180;
     maxRightAngle.current = 0;
+
+    // Reset signal processor for clean temporal stream
+    if (signalProcessor.current) {
+      signalProcessor.current.reset();
+    }
 
     const durationSeconds = 8; 
     const startTime = performance.now();
@@ -667,33 +726,181 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
     }, 200);
   };
 
+  // Evaluate test-level Quality Gate validation
+  const evaluateTestQuality = (testType: 'KNEE_FLEXION' | 'SIT_TO_STAND' | 'WALKING'): {
+    passed: boolean;
+    reason: string;
+  } => {
+    const stats = testType === 'KNEE_FLEXION' 
+      ? test1Stats.current 
+      : testType === 'SIT_TO_STAND' 
+      ? test2Stats.current 
+      : test3Stats.current;
+    
+    const frames = testType === 'KNEE_FLEXION' 
+      ? test1Frames.current 
+      : testType === 'SIT_TO_STAND' 
+      ? test2Frames.current 
+      : test3Frames.current;
+
+    const tTot = stats.total > 0 ? stats.total : frames.length;
+    const tVal = stats.valid > 0 ? stats.valid : frames.filter(f => f.frame_valid).length;
+    const tRatio = tTot > 0 ? tVal / tTot : 0;
+    const tConf = tTot > 0 && stats.confSum > 0 ? Math.round((stats.confSum / tTot) * 100) : 0;
+
+    // Check minimum captured frame count
+    if (tTot < 10) {
+      return {
+        passed: false,
+        reason: 'Insufficient movement data recorded. Please ensure your body remains within the camera view.'
+      };
+    }
+
+    // Check landmark tracking validity ratio and confidence
+    if (tRatio < 0.60 || tConf < 50) {
+      return {
+        passed: false,
+        reason: lastInstructionRef.current || 'Key lower-body landmarks (knees/ankles) were occluded or not detected reliably. Please step back and repeat.'
+      };
+    }
+
+    // Test-specific biomechanical validation
+    if (testType === 'KNEE_FLEXION') {
+      const telemetryStats = signalProcessor.current.getTelemetryStats();
+      const validFrames = frames.filter(f => f.frame_valid);
+      const sourceList = validFrames.length >= 5 ? validFrames : frames;
+      const lAngles = sourceList.map(f => f.left_knee_angle);
+      const rAngles = sourceList.map(f => f.right_knee_angle);
+      const lRom = lAngles.length > 0 ? Math.max(...lAngles) - Math.min(...lAngles) : 0;
+      const rRom = rAngles.length > 0 ? Math.max(...rAngles) - Math.min(...rAngles) : 0;
+      const maxRom = Math.max(lRom, rRom, telemetryStats.leftRom, telemetryStats.rightRom);
+
+      if (!telemetryStats.movementCompleted && maxRom < 20) {
+        return {
+          passed: false,
+          reason: 'Movement tracking detected insufficient active excursion (<20°). Please repeat with a clear knee bend.'
+        };
+      }
+    } else if (testType === 'SIT_TO_STAND') {
+      const reps = sitToStandRepsRef.current;
+      const validFrames = frames.filter(f => f.frame_valid);
+      const sourceList = validFrames.length >= 5 ? validFrames : frames;
+      const kneeAverages = sourceList.map(f => (f.left_knee_angle + f.right_knee_angle) / 2);
+      const sitSpan = kneeAverages.length > 0 ? Math.max(...kneeAverages) - Math.min(...kneeAverages) : 0;
+
+      if (reps < 1 && sitSpan < 25) {
+        return {
+          passed: false,
+          reason: 'Sit-to-stand motion cycle was not detected. Please rise fully from the chair and sit down smoothly.'
+        };
+      }
+    } else if (testType === 'WALKING') {
+      if (tVal < 8) {
+        return {
+          passed: false,
+          reason: 'Insufficient walking steps detected within the camera frame. Please walk across the view steadily.'
+        };
+      }
+    }
+
+    return { passed: true, reason: '' };
+  };
+
   const completeRunningTest = (runningState: MovementState) => {
     if (runningState === 'KNEE_FLEXION_RUNNING') {
+      const evalResult = evaluateTestQuality('KNEE_FLEXION');
+      if (!evalResult.passed) {
+        console.warn('[MovementTest] Test 1 failed validation:', evalResult.reason);
+        setTestIncompleteReason(evalResult.reason);
+        transitionTo('KNEE_FLEXION_INCOMPLETE', 'Validation failed: ' + evalResult.reason);
+        return;
+      }
+      // PASS: Mark Test 1 completed and automatically proceed to Test 2 (Sit-to-Stand ready)
+      setTestIncompleteReason(null);
+      setTestPassMessage('Knee Flexion Completed');
       transitionTo('KNEE_FLEXION_COMPLETED');
-      // STRICT: Move to SIT_TO_STAND_READY and DO NOT auto-start or auto-complete Step 2!
       transitionTo('SIT_TO_STAND_READY');
     } else if (runningState === 'SIT_TO_STAND_RUNNING') {
+      const evalResult = evaluateTestQuality('SIT_TO_STAND');
+      if (!evalResult.passed) {
+        console.warn('[MovementTest] Test 2 failed validation:', evalResult.reason);
+        setTestIncompleteReason(evalResult.reason);
+        transitionTo('SIT_TO_STAND_INCOMPLETE', 'Validation failed: ' + evalResult.reason);
+        return;
+      }
+      // PASS: Mark Test 2 completed and automatically proceed to Test 3 (Walking ready)
       sitToStandCompletedRef.current = true;
+      setTestIncompleteReason(null);
+      setTestPassMessage('Sit-to-Stand Completed');
       transitionTo('SIT_TO_STAND_COMPLETED');
-      // STRICT: Move to WALKING_READY and DO NOT auto-start or auto-complete Step 3!
       transitionTo('WALKING_READY');
     } else if (runningState === 'WALKING_RUNNING') {
+      const evalResult = evaluateTestQuality('WALKING');
+      if (!evalResult.passed) {
+        console.warn('[MovementTest] Test 3 failed validation:', evalResult.reason);
+        setTestIncompleteReason(evalResult.reason);
+        transitionTo('WALKING_INCOMPLETE', 'Validation failed: ' + evalResult.reason);
+        return;
+      }
+      // PASS: Mark Test 3 completed and proceed to Final Result
+      setTestIncompleteReason(null);
+      setTestPassMessage('Walking Test Completed');
       transitionTo('WALKING_COMPLETED');
       transitionTo('FINAL_RESULT');
       finishAllTests();
     }
   };
+
+  // Test-level retry handlers: resets only the current test buffer and stats, without affecting previous tests or questionnaire
+  const repeatCurrentTest = (testType: 'KNEE_FLEXION' | 'SIT_TO_STAND' | 'WALKING') => {
+    setTestIncompleteReason(null);
+    setTestPassMessage(null);
+    if (signalProcessor.current) {
+      signalProcessor.current.reset();
+    }
+
+    if (testType === 'KNEE_FLEXION') {
+      test1Frames.current = [];
+      test1Stats.current = { valid: 0, total: 0, confSum: 0 };
+      transitionTo('KNEE_FLEXION_READY', 'User requested repeat of Knee Flexion');
+    } else if (testType === 'SIT_TO_STAND') {
+      test2Frames.current = [];
+      test2Stats.current = { valid: 0, total: 0, confSum: 0 };
+      sitToStandRepsRef.current = 0;
+      setSitToStandReps(0);
+      sitToStandPhaseRef.current = 'standing';
+      sitToStandStartedRef.current = false;
+      sitToStandCompletedRef.current = false;
+      transitionTo('SIT_TO_STAND_READY', 'User requested repeat of Sit-to-Stand');
+    } else if (testType === 'WALKING') {
+      test3Frames.current = [];
+      test3Stats.current = { valid: 0, total: 0, confSum: 0 };
+      transitionTo('WALKING_READY', 'User requested repeat of Walking Test');
+    }
+  };
   
   const forceStop = () => {
-     finishAllTests();
+     const curr = movementStateRef.current;
+     if (curr === 'KNEE_FLEXION_RUNNING' || curr === 'SIT_TO_STAND_RUNNING' || curr === 'WALKING_RUNNING') {
+       if (progressTimerRef.current) {
+         clearInterval(progressTimerRef.current);
+         progressTimerRef.current = null;
+       }
+       completeRunningTest(curr);
+     } else {
+       finishAllTests();
+     }
   };
 
   const finishAllTests = () => {
     transitionTo('FINAL_RESULT', 'All movement tests completed');
     stopCamera();
 
-    const leftRom = Math.max(0, maxLeftAngle.current - minLeftAngle.current);
-    const rightRom = Math.max(0, maxRightAngle.current - minRightAngle.current);
+    // Query robust telemetry stats from the processor
+    const telemetryStats = signalProcessor.current.getTelemetryStats();
+
+    const leftRom = telemetryStats.leftRom > 0 ? telemetryStats.leftRom : Math.max(0, maxLeftAngle.current - minLeftAngle.current);
+    const rightRom = telemetryStats.rightRom > 0 ? telemetryStats.rightRom : Math.max(0, maxRightAngle.current - minRightAngle.current);
     const maxRom = Math.max(leftRom, rightRom);
     const kneeSym = maxRom > 0 ? Math.round(100 - (Math.abs(leftRom - rightRom) / maxRom) * 100) : 100;
 
@@ -714,6 +921,9 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
     } else if (validRatio < 0.65 || avgConfidence < 60) {
       finalAssessmentStatus = 'REPEAT_REQUIRED';
       finalValidationMessage = lastInstructionRef.current || 'Key lower-body landmarks were not detected reliably. Please reposition and repeat.';
+    } else if (!telemetryStats.movementCompleted && leftRom < 20 && rightRom < 20) {
+      finalAssessmentStatus = 'REPEAT_REQUIRED';
+      finalValidationMessage = 'Movement tracking detected insufficient active excursion. Please repeat with clear knee movement.';
     } else {
       finalAssessmentStatus = 'VALID';
       finalValidationMessage = 'Full-body landmarks verified with reliable tracking quality.';
@@ -737,14 +947,26 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
 
       let lRom = 120, rRom = 120, kSym = 95, avgAng = 120;
       if (fList.length > 0) {
-        const lAngles = fList.map(f => f.left_knee_angle);
-        const rAngles = fList.map(f => f.right_knee_angle);
-        const minL = Math.min(...lAngles);
-        const maxL = Math.max(...lAngles);
-        const minR = Math.min(...rAngles);
-        const maxR = Math.max(...rAngles);
-        lRom = Math.max(10, maxL - minL);
-        rRom = Math.max(10, maxR - minR);
+        // Filter strictly valid frames where available to avoid noise spikes
+        const validFramesList = fList.filter(f => f.frame_valid);
+        const sourceList = validFramesList.length >= 5 ? validFramesList : fList;
+        const lAngles = sourceList.map(f => f.left_knee_angle);
+        const rAngles = sourceList.map(f => f.right_knee_angle);
+
+        // Robust percentile-based ROM bounds with peak retention
+        const sortedL = [...lAngles].sort((a, b) => a - b);
+        const sortedR = [...rAngles].sort((a, b) => a - b);
+        const minL = sortedL[Math.floor(sortedL.length * 0.05)] || sortedL[0];
+        const maxL = sortedL[Math.floor(sortedL.length * 0.95)] || sortedL[sortedL.length - 1];
+        const minR = sortedR[Math.floor(sortedR.length * 0.05)] || sortedR[0];
+        const maxR = sortedR[Math.floor(sortedR.length * 0.95)] || sortedR[sortedR.length - 1];
+        const rawMinL = Math.min(...lAngles);
+        const rawMaxL = Math.max(...lAngles);
+        const rawMinR = Math.min(...rAngles);
+        const rawMaxR = Math.max(...rAngles);
+
+        lRom = Math.max(10, Math.max(maxL - minL, rawMaxL - rawMinL));
+        rRom = Math.max(10, Math.max(maxR - minR, rawMaxR - rawMinR));
         const mRom = Math.max(lRom, rRom);
         kSym = mRom > 0 ? Math.round(100 - (Math.abs(lRom - rRom) / mRom) * 100) : 95;
         avgAng = Math.round((lAngles.reduce((a, b) => a + b, 0) / lAngles.length));
@@ -844,6 +1066,15 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
     onComplete(summary);
   };
 
+  // Helper flags for step navigation
+  const isTest1Active = movementState.startsWith('KNEE_FLEXION');
+  const isTest2Active = movementState.startsWith('SIT_TO_STAND');
+  const isTest3Active = movementState.startsWith('WALKING');
+
+  const isTest1Passed = movementState !== 'KNEE_FLEXION_READY' && movementState !== 'KNEE_FLEXION_RUNNING' && movementState !== 'KNEE_FLEXION_INCOMPLETE';
+  const isTest2Passed = movementState === 'SIT_TO_STAND_COMPLETED' || isTest3Active || movementState === 'FINAL_RESULT';
+  const isTest3Passed = movementState === 'WALKING_COMPLETED' || movementState === 'FINAL_RESULT';
+
   return (
     <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
       <div className="border-b border-slate-200 bg-slate-50 px-6 py-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
@@ -861,20 +1092,20 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
             {
               idx: 1,
               title: 'Knee Flexion',
-              isCompleted: movementState !== 'KNEE_FLEXION_READY' && movementState !== 'KNEE_FLEXION_RUNNING',
-              isCurrent: movementState === 'KNEE_FLEXION_READY' || movementState === 'KNEE_FLEXION_RUNNING'
+              isCompleted: isTest1Passed,
+              isCurrent: isTest1Active
             },
             {
               idx: 2,
               title: 'Sit-to-Stand',
-              isCompleted: movementState === 'SIT_TO_STAND_COMPLETED' || movementState === 'WALKING_READY' || movementState === 'WALKING_RUNNING' || movementState === 'WALKING_COMPLETED' || movementState === 'FINAL_RESULT',
-              isCurrent: movementState === 'SIT_TO_STAND_READY' || movementState === 'SIT_TO_STAND_RUNNING'
+              isCompleted: isTest2Passed,
+              isCurrent: isTest2Active
             },
             {
               idx: 3,
               title: 'Walking Test',
-              isCompleted: movementState === 'WALKING_COMPLETED' || movementState === 'FINAL_RESULT',
-              isCurrent: movementState === 'WALKING_READY' || movementState === 'WALKING_RUNNING'
+              isCompleted: isTest3Passed,
+              isCurrent: isTest3Active
             }
           ].map((item) => (
             <div
@@ -916,11 +1147,14 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
             className="w-full h-full object-contain"
           />
           {countdownTimerRef.current !== null && (
-            <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-xs flex flex-col items-center justify-center text-white z-20">
-              <span className="text-sm font-semibold tracking-wider uppercase text-teal-400 mb-2">
-                {t('mov.countdown')}
+            <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xs flex flex-col items-center justify-center text-white z-30 transition-all duration-300">
+              <span className="text-xs font-medium tracking-widest uppercase text-slate-300 mb-2">
+                Starting movement in
               </span>
-              <span className="text-7xl font-extrabold animate-ping text-white">{countdown}</span>
+              <span className="text-8xl font-black text-teal-300 drop-shadow-lg animate-pulse">{countdown}</span>
+              <span className="text-xs text-slate-400 mt-4">
+                {movementState === 'SIT_TO_STAND_READY' ? 'Sit-to-Stand Test starting...' : movementState === 'WALKING_READY' ? 'Walking Test starting...' : 'Knee Flexion Test starting...'}
+              </span>
             </div>
           )}
           {/* Top HUD with Quality-Aware Landmark Validation Badge */}
@@ -949,10 +1183,32 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
                 {framingStatus}
               </span>
               <span className="text-white/40">|</span>
+              <span className="text-slate-400">Phase:</span>
+              <span className="font-mono text-teal-300 uppercase text-[11px] font-bold">{currentPhase}</span>
+              <span className="text-white/40">|</span>
               <span className="text-slate-400">Quality:</span>
               <span className="font-mono font-bold text-teal-300">{landmarkQualityScore}%</span>
+              <button
+                type="button"
+                onClick={() => setDebugMode(!debugMode)}
+                className={`ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold border transition pointer-events-auto ${
+                  debugMode
+                    ? 'bg-amber-500/20 text-amber-300 border-amber-400/40 hover:bg-amber-500/30'
+                    : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-200'
+                }`}
+                title="Toggle development-only skeleton telemetry overlay"
+              >
+                {debugMode ? 'DEBUG ON' : 'DEBUG'}
+              </button>
             </div>
           </div>
+
+          {/* Outlier Jitter Warning Indicator */}
+          {outlierWarning && (
+            <div className="absolute top-12 right-3 bg-rose-950/90 border border-rose-500/60 text-rose-200 px-2.5 py-1 rounded-md text-[10px] font-mono tracking-wide z-20 pointer-events-none animate-pulse">
+              OUTLIER CLAMPED (&gt;380°/s)
+            </div>
+          )}
 
           {/* Real-time Quality Guidance Instruction Banner */}
           {liveValidationInstruction && (
@@ -997,6 +1253,52 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
             )}
           </div>
         </div>
+
+        {/* TEST-LEVEL FAILURE CARD: Movement Assessment Incomplete */}
+        {(movementState === 'KNEE_FLEXION_INCOMPLETE' || movementState === 'SIT_TO_STAND_INCOMPLETE' || movementState === 'WALKING_INCOMPLETE') && (
+          <div className="mt-4 p-5 rounded-2xl bg-amber-50 border-2 border-amber-300 shadow-sm space-y-3">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2">
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-200 text-amber-900 uppercase tracking-wide">
+                    {movementState === 'KNEE_FLEXION_INCOMPLETE' ? 'Test 1: Knee Flexion' : movementState === 'SIT_TO_STAND_INCOMPLETE' ? 'Test 2: Sit-to-Stand' : 'Test 3: Walking'}
+                  </span>
+                  <h3 className="text-sm font-bold text-amber-950">Movement Assessment Incomplete</h3>
+                </div>
+                <p className="text-xs text-amber-900 font-medium leading-relaxed">
+                  {testIncompleteReason || 'Camera/movement data was insufficient for reliable evaluation. Please repeat this specific test.'}
+                </p>
+                <p className="text-[11px] text-amber-700">
+                  Movement Recording Complete. Please repeat this movement test to satisfy quality standards before proceeding to the next test.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  if (movementState === 'KNEE_FLEXION_INCOMPLETE') repeatCurrentTest('KNEE_FLEXION');
+                  else if (movementState === 'SIT_TO_STAND_INCOMPLETE') repeatCurrentTest('SIT_TO_STAND');
+                  else if (movementState === 'WALKING_INCOMPLETE') repeatCurrentTest('WALKING');
+                }}
+                className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs shadow-sm flex items-center space-x-2 transition flex-shrink-0"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>
+                  {movementState === 'KNEE_FLEXION_INCOMPLETE' && 'Repeat Knee Flexion'}
+                  {movementState === 'SIT_TO_STAND_INCOMPLETE' && 'Repeat Sit-to-Stand'}
+                  {movementState === 'WALKING_INCOMPLETE' && 'Repeat Walking Test'}
+                </span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* TEST-LEVEL SUCCESS NOTIFICATION */}
+        {testPassMessage && (movementState === 'SIT_TO_STAND_READY' || movementState === 'WALKING_READY') && !testIncompleteReason && (
+          <div className="mt-4 p-3 rounded-xl bg-emerald-50 border border-emerald-300 flex items-center space-x-2 text-xs font-semibold text-emerald-800">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+            <span>Movement Assessment Completed: {testPassMessage}. Proceeding to next test below.</span>
+          </div>
+        )}
+
         <div className="mt-4 p-4 rounded-xl bg-teal-50/70 border border-teal-200 flex flex-col md:flex-row items-center justify-between gap-4">
           <div>
             <div className="flex items-center space-x-2">
@@ -1006,14 +1308,29 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
                 {movementState.startsWith('WALKING') && t('mov.test3Title')}
                 {movementState === 'FINAL_RESULT' && 'Screening Complete'}
               </span>
-              {palmGestureDetected && (
-                <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center space-x-1 animate-pulse">
-                  <span>✋ {t('mov.palmDetected')}</span>
-                </span>
-              )}
-              {(movementState === 'KNEE_FLEXION_READY' || movementState === 'SIT_TO_STAND_READY' || movementState === 'WALKING_READY') && (
+              {(movementState === 'SIT_TO_STAND_READY' || movementState === 'WALKING_READY' || movementState === 'KNEE_FLEXION_READY') && (
                 <span className="bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-bold px-2 py-0.5 rounded-full">
                   Ready to Start
+                </span>
+              )}
+              {movementState === 'SIT_TO_STAND_RUNNING' && (
+                <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                  ▶ Sit-to-Stand Started
+                </span>
+              )}
+              {movementState === 'WALKING_RUNNING' && (
+                <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                  ▶ Walking Test Started
+                </span>
+              )}
+              {movementState === 'KNEE_FLEXION_RUNNING' && (
+                <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                  ▶ Knee Flexion Started
+                </span>
+              )}
+              {(movementState === 'KNEE_FLEXION_INCOMPLETE' || movementState === 'SIT_TO_STAND_INCOMPLETE' || movementState === 'WALKING_INCOMPLETE') && (
+                <span className="bg-rose-100 text-rose-800 border border-rose-300 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                  Movement Assessment Incomplete
                 </span>
               )}
             </div>
@@ -1021,9 +1338,7 @@ export const CameraMovementTracker: React.FC<CameraMovementTrackerProps> = ({ on
               {movementState.startsWith('KNEE_FLEXION') && t('mov.test1Desc')}
               {movementState.startsWith('SIT_TO_STAND') && t('mov.test2Desc')}
               {movementState.startsWith('WALKING') && t('mov.test3Desc')}
-            </p>
-            <p className="text-[11px] text-teal-700 mt-1 flex items-center space-x-1 font-medium">
-              <span>💡 {t('mov.palmHint')}</span>
+              {movementState === 'FINAL_RESULT' && 'All movement tests verified. Finalizing screening result.'}
             </p>
           </div>
           <div className="flex items-center space-x-3 w-full md:w-auto justify-end">

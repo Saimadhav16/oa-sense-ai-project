@@ -9,31 +9,36 @@
 
 ```mermaid
 flowchart TD
-    A[Webcam Video Stream] --> B[Pose Estimation & Landmarks]
-    B --> C[Joint Angle Calculation Hip-Knee-Ankle]
-    B --> D[Gait & Symmetry Analysis]
-    B --> E[Posture Alignment Analysis]
-    C & D & E --> F[Movement Feature Extractor]
-    G[Pain & Mobility Questionnaire] --> H[Questionnaire Feature Extractor]
-    I[Demographics & Risk Factors] --> J[Clinical Features]
-    F & H & J --> K[ML Preprocessing Pipeline]
-    K --> L[Trained Risk Classification Model]
-    L --> M[Risk Assessment & Explainable AI Engine]
-    M --> N[Interactive Result Dashboard]
-    N --> O[ReportLab PDF Generator]
-    N --> P[SQLAlchemy / SQLite Patient Database]
-    N --> Q[Offline Local Storage / Sync Queue]
+    A[Webcam Video Stream] --> B[MediaPipe Pose Tracking]
+    B --> C[Full-Body Landmark Validation & Framing Check]
+    C -->|Unreliable / Missing Joints| D[Quality Gate: REPEAT_REQUIRED / INSUFFICIENT_DATA]
+    D -->|Actionable Reposition Guidance| A
+    C -->|Quality Verified: VALID| E[Real Time-Series Kinematics Engine]
+    E --> F[Knee ROM Dynamics, Min/Max/Mean/Median, Angular Velocity]
+    E --> G[Bilateral Symmetry & Gait Regularity]
+    E --> H[Movement Smoothness & Temporal Signal Quality]
+    I[Functional 9-Point Questionnaire] --> J[Questionnaire Symptom Burden Score]
+    K[Patient Demographics & Clinical History] --> L[Clinical Features]
+    F & G & H & J & L --> M[Multimodal Feature Fusion]
+    M --> N[ML Inference: XGBoost / Random Forest / Logistic Regression]
+    N --> O[Explainable AI Decision Attribution & Probability]
+    O --> P[Interactive Quality-Aware Result Dashboard]
+    O --> Q[ReportLab Clinical Screening PDF Generator]
+    O --> R[SQLAlchemy / SQLite Patient Records Database]
 ```
 
-### Biomechanical Pipeline Flow
-1. **Camera Feed & Pose Estimation**: Browser captures webcam video at 30 FPS. MediaPipe Pose tracks 33 anatomical landmarks (key tracking nodes: Shoulders, Hips, Knees, and Ankles).
-2. **Joint Angle Calculation**: Evaluates the 2D planar angle at the knee vertex formed by vectors $\vec{u} = \text{Hip} - \text{Knee}$ and $\vec{v} = \text{Ankle} - \text{Knee}$:
-   $$\theta = \arccos\left(\frac{\vec{u} \cdot \vec{v}}{\|\vec{u}\| \|\vec{v}\|}\right)$$
-3. **Gait & Dynamic Symmetry**: Assesses peak flexion timing, bilateral ROM difference, cadence (steps/min), movement consistency, and normalized smoothness (jerk variance).
-4. **Posture Analysis**: Analyzes bi-acromial shoulder tilt, pelvic alignment, and trunk vertical inclination.
-5. **Machine Learning Model**: Normalizes and scales combined questionnaire and computer-vision features to classify OA risk level (`Low Risk`, `Moderate Risk`, `High Risk`) with probabilistic confidence.
-6. **Explainable AI**: Decomposes decision weights into transparent risk drivers (Pain Intensity, ROM Restriction, Gait Asymmetry, Posture Deviation).
-7. **Clinical Screening Report**: Compiles results into a multi-page PDF document with recommendations and safety disclaimers using ReportLab.
+### Biomechanical & Quality Pipeline Flow
+1. **Camera Feed & Full-Body Landmark Validation**: Browser captures webcam video at 30 FPS. MediaPipe Pose tracks key body landmarks (Shoulders, Hips, Knees, Ankles, Feet). Per-frame confidence filtering and body framing checks ensure joints are not occluded or cut off.
+2. **Quality Gate & Adaptive Reassessment**: Evaluates overall tracking reliability, valid frame ratio, and temporal stability. If critical landmarks are lost or the user is poorly framed, the assessment state transitions to `REPEAT_REQUIRED` or `INSUFFICIENT_DATA`, preventing unreliable camera data from ever reaching ML inference.
+3. **Real Time-Series Movement Analysis**:
+   - Computes dynamic knee angles independently for left and right legs using Hip $\rightarrow$ Knee $\rightarrow$ Ankle vectors.
+   - Extracts min, max, mean, median knee angles, true range of motion (ROM), and peak angular velocity (°/s).
+   - Identifies movement phases (flexion, extension, hold) and repetition cycles.
+   - Computes signal continuity, temporal stability, and bilateral left/right differences.
+4. **Multimodal Feature Fusion**: Combines validated movement kinematics, movement data quality scores, questionnaire symptom burden, and patient clinical history into an unified feature vector.
+5. **Machine Learning Risk Stratification**: Performs classification into `Low Risk`, `Moderate Risk`, or `High Risk` with explicit model prediction probability using calibrated models (Logistic Regression, Random Forest, XGBoost).
+6. **Explainable AI**: Decomposes decision weights into transparent risk drivers (ROM Restriction, Bilateral Difference, Movement Consistency, Questionnaire Burden).
+7. **Clinical Screening Report**: Generates a comprehensive ReportLab PDF including data quality status, time-series kinematics, model prediction probability, and standard medical screening disclaimers.
 
 ---
 
@@ -41,7 +46,7 @@ flowchart TD
 
 - **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Recharts, Lucide React icons, MediaPipe Pose CDN.
 - **Backend**: Python 3.11+, FastAPI, Uvicorn, SQLAlchemy ORM, SQLite database, Pydantic v2, PyJWT / bcrypt.
-- **AI & Computer Vision**: OpenCV, MediaPipe Pose, NumPy, Pandas, Scikit-learn (Logistic Regression, Random Forest, Gradient Boosting), Joblib.
+- **AI & Computer Vision**: OpenCV, MediaPipe Pose, NumPy, Pandas, Scikit-learn (Logistic Regression, Random Forest, XGBoost), Joblib.
 - **Reporting**: ReportLab PDF generator.
 - **Real-Time Telemetry**: WebSocket (`/ws/movement-analysis`).
 

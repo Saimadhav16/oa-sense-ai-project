@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from .database import engine, Base, SessionLocal
 from .models import User, Patient, Screening, Report
 from .auth import seed_demo_user
-from .routes import auth, patients, screening, reports, dashboard
+from .routes import auth, patients, screening, reports, dashboard, system
 from .ml.pose_analysis import calculate_knee_angles, analyze_posture
 from .ml.gait_analysis import analyze_gait_time_series
 from .ml.model import load_ml_model
@@ -40,6 +40,7 @@ app.include_router(patients.router)
 app.include_router(screening.router)
 app.include_router(reports.router)
 app.include_router(dashboard.router)
+app.include_router(system.router)
 
 # Ensure reports directory exists
 REPORTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reports")

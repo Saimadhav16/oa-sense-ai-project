@@ -8,7 +8,25 @@ import {
 } from '../types';
 import { saveOfflineScreening } from './offlineStorage';
 
-export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string) || 'http://127.0.0.1:8000';
+// Determine API Base URL dynamically:
+// 1. Explicit VITE_API_BASE_URL environment variable if provided
+// 2. If opened from mobile/LAN (non-localhost/127.0.0.1), use the same host with backend port 8000
+// 3. Fallback to http://127.0.0.1:8000 for local development
+const resolveApiBaseUrl = (): string => {
+  const envUrl = import.meta.env.VITE_API_BASE_URL as string;
+  if (envUrl && envUrl.trim()) {
+    return envUrl.trim().replace(/\/$/, '');
+  }
+  if (typeof window !== 'undefined' && window.location) {
+    const { hostname, protocol } = window.location;
+    if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1') {
+      return `${protocol}//${hostname}:8000`;
+    }
+  }
+  return 'http://127.0.0.1:8000';
+};
+
+export const API_BASE_URL = resolveApiBaseUrl();
 
 const getAuthHeaders = (): HeadersInit => {
   const token = localStorage.getItem('oasense_auth_token');
@@ -82,7 +100,7 @@ export const api = {
     return await res.json();
   },
 
-  async getPatientById(id: number): Promise<{ patient: Patient; screenings: any[] }> {
+  async getPatientById(id: number): Promise<{ patient: Patient; screenings: any[]; trajectory?: any; qr_passes?: any[] }> {
     const res = await fetch(`${API_BASE_URL}/api/patients/${id}`, {
       headers: getAuthHeaders()
     });
@@ -182,6 +200,82 @@ export const api = {
 
   getReportDownloadUrl(reportId: number): string {
     return `${API_BASE_URL}/api/reports/${reportId}`;
+  },
+
+  async updatePatient(id: number, data: Partial<Patient>): Promise<Patient> {
+    const res = await fetch(`${API_BASE_URL}/api/patients/${id}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error('Failed to update patient record');
+    return await res.json();
+  },
+
+  async getPatientTrajectory(id: number): Promise<{ patient_id: number; trajectory: any }> {
+    const res = await fetch(`${API_BASE_URL}/api/patients/${id}/trajectory`, {
+      headers: getAuthHeaders()
+    });
+    if (!res.ok) throw new Error('Failed to load patient trajectory');
+    return await res.json();
+  },
+
+  // Secure QR Access Management
+  async generatePatientQR(patientId: number, expiresInHours: number = 72): Promise<any> {
+    const res = await fetch(`${API_BASE_URL}/api/patients/${patientId}/qr`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ expires_in_hours: expiresInHours })
+    });
+    if (!res.ok) throw new Error('Failed to generate secure QR token');
+    return await res.json();
+  },
+
+  async revokePatientQR(qrId: number): Promise<any> {
+    const res = await fetch(`${API_BASE_URL}/api/patients/qr/${qrId}/revoke`, {
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    });
+    if (!res.ok) throw new Error('Failed to revoke QR access pass');
+    return await res.json();
+  },
+
+  async accessPatientByQR(token: string): Promise<any> {
+    const res = await fetch(`${API_BASE_URL}/api/access/qr/${token}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Invalid or expired QR token' }));
+      throw new Error(err.detail || 'Access denied');
+    }
+    return await res.json();
+  },
+
+  // Audit Logs & Sync Queue Observability
+  async getAuditLogs(action?: string, limit: number = 30): Promise<any[]> {
+    const params = new URLSearchParams();
+    if (action) params.append('action', action);
+    params.append('limit', limit.toString());
+    const res = await fetch(`${API_BASE_URL}/api/audit-logs?${params.toString()}`, {
+      headers: getAuthHeaders()
+    });
+    if (!res.ok) return [];
+    return await res.json();
+  },
+
+  async getSyncQueueStatus(): Promise<any> {
+    const res = await fetch(`${API_BASE_URL}/api/sync/queue`, {
+      headers: getAuthHeaders()
+    });
+    if (!res.ok) throw new Error('Failed to fetch sync queue status');
+    return await res.json();
+  },
+
+  async retryFailedSync(): Promise<any> {
+    const res = await fetch(`${API_BASE_URL}/api/sync/retry`, {
+      method: 'POST',
+      headers: getAuthHeaders()
+    });
+    if (!res.ok) throw new Error('Failed to retry sync queue');
+    return await res.json();
   },
 
   // Offline Sync

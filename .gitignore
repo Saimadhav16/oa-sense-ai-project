@@ -33,6 +33,7 @@ frontend/.cache/
 backend/data/*.db
 backend/data/*.sqlite
 backend/data/*.sqlite3
+backend/data/backups/
 !backend/data/.gitkeep
 backend/reports/*.pdf
 !backend/reports/.gitkeep

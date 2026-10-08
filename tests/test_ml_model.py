@@ -48,4 +48,4 @@ def test_prediction_output_structure():
     assert round(res["questionnaire_contribution"] + res["movement_contribution"], 1) == 100.0
     assert len(res["top_risk_factors"]) > 0
     assert len(res["recommendations"]) > 0
-    assert "NOT a medical diagnosis" in res["disclaimer"]
+    assert "does NOT provide a definitive diagnosis of osteoarthritis" in res["disclaimer"]

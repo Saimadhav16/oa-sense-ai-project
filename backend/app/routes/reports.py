@@ -49,6 +49,9 @@ def generate_report(req: ReportGenerateRequest, db: Session = Depends(get_db)):
         "risk_level": screening.risk_level,
         "risk_probability": screening.risk_probability,
         "confidence": screening.confidence,
+        "confidence_level": screening.confidence_level or "HIGH",
+        "data_quality": screening.data_quality or "GOOD",
+        "confidence_reason": screening.confidence_reason,
         "questionnaire_contribution": screening.questionnaire_contribution,
         "movement_contribution": screening.movement_contribution
     }
@@ -64,6 +67,9 @@ def generate_report(req: ReportGenerateRequest, db: Session = Depends(get_db)):
         "risk_level": screening.risk_level,
         "risk_probability": screening.risk_probability,
         "confidence": screening.confidence,
+        "confidence_level": screening.confidence_level or "HIGH",
+        "data_quality": screening.data_quality or "GOOD",
+        "confidence_reason": screening.confidence_reason,
         "questionnaire_contribution": screening.questionnaire_contribution,
         "movement_contribution": screening.movement_contribution,
         "top_risk_factors": top_factors
@@ -74,6 +80,16 @@ def generate_report(req: ReportGenerateRequest, db: Session = Depends(get_db)):
         patient_data=patient_dict,
         screening_data=screening_dict,
         prediction_data=prediction_dict
+    )
+
+    from ..services.audit_service import log_audit_event, AuditAction
+    log_audit_event(
+        db=db,
+        action=AuditAction.REPORT_GENERATED,
+        patient_id=patient.id,
+        assessment_id=screening.id,
+        status="SUCCESS",
+        details={"file_name": os.path.basename(pdf_path)}
     )
 
     # Persist or update Report record

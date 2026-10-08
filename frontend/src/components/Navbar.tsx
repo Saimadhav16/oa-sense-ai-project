@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, Users, FileText, PlusCircle, Globe, Wifi, WifiOff, LogOut, ShieldAlert } from 'lucide-react';
+import { Activity, Users, FileText, PlusCircle, Globe, Wifi, WifiOff, ShieldAlert } from 'lucide-react';
 import { useTranslation, Language } from '../utils/i18n';
 import { getPendingSyncCount, markAllOfflineSynced } from '../services/offlineStorage';
 import { api } from '../services/api';
@@ -7,16 +7,15 @@ import { api } from '../services/api';
 interface NavbarProps {
   currentView: string;
   setCurrentView: (view: string) => void;
-  onLogout: () => void;
+  onLogout?: () => void;
+  onStartNewScreening?: () => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ currentView, setCurrentView, onLogout }) => {
+export const Navbar: React.FC<NavbarProps> = ({ currentView, setCurrentView, onLogout, onStartNewScreening }) => {
   const { t, language, setLanguage } = useTranslation();
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [pendingSync, setPendingSync] = useState<number>(0);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
-
-  const userName = localStorage.getItem('oasense_user_name') || 'Healthcare Worker';
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -114,7 +113,13 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, setCurrentView, onL
             </button>
 
             <button
-              onClick={() => setCurrentView('register-patient')}
+              onClick={() => {
+                if (onStartNewScreening) {
+                  onStartNewScreening();
+                } else {
+                  setCurrentView('register-patient');
+                }
+              }}
               className="ml-2 px-3.5 py-2 rounded-lg text-sm font-semibold bg-teal-600 text-white hover:bg-teal-700 shadow-sm shadow-teal-600/20 flex items-center space-x-1.5 transition"
             >
               <PlusCircle className="w-4 h-4" />
@@ -166,20 +171,6 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, setCurrentView, onL
                 हिंदी
               </button>
             </div>
-
-            {/* User Profile & Logout */}
-            <div className="hidden lg:flex flex-col text-right">
-              <span className="text-xs font-semibold text-slate-800 leading-tight">{userName}</span>
-              <span className="text-[10px] text-slate-500">Clinician / Outreach</span>
-            </div>
-
-            <button
-              onClick={onLogout}
-              title={t('nav.logout')}
-              className="p-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
           </div>
         </div>
       </div>

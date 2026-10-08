@@ -9,22 +9,32 @@ import { ResultDashboardPage } from './pages/ResultDashboardPage';
 import { PatientProfilePage } from './pages/PatientProfilePage';
 import { PatientsListPage } from './pages/PatientsListPage';
 import { ReportsPage } from './pages/ReportsPage';
+import { QRAccessPage } from './pages/QRAccessPage';
 import { LanguageProvider } from './utils/i18n';
 import { Patient, QuestionnaireData, ScreeningRecord } from './types';
 import { api } from './services/api';
 
 export const App: React.FC = () => {
+  // Check if opening direct QR access URL: /access/:token
+  const initialQrToken = window.location.pathname.startsWith('/access/')
+    ? window.location.pathname.replace('/access/', '').trim()
+    : null;
+
+  const [qrToken, setQrToken] = useState<string | null>(initialQrToken);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     return !!localStorage.getItem('oasense_auth_token');
   });
 
-  const [currentView, setCurrentView] = useState<string>('dashboard');
+  const [currentView, setCurrentView] = useState<string>(initialQrToken ? 'qr-access' : 'dashboard');
 
   // Screening Flow State
   const [activePatient, setActivePatient] = useState<Patient | null>(null);
   const [activeQuestionnaire, setActiveQuestionnaire] = useState<QuestionnaireData | null>(null);
   const [activeScreeningResult, setActiveScreeningResult] = useState<ScreeningRecord | null>(null);
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null);
+
+  // Session key to force fresh component mounting across new screenings
+  const [screeningSessionKey, setScreeningSessionKey] = useState<number>(Date.now());
 
   const handleLogout = () => {
     api.logout();
@@ -36,25 +46,29 @@ export const App: React.FC = () => {
     setCurrentView('dashboard');
   };
 
-  // Workflow transitions
-  const handleStartNewScreening = async (targetPatient?: Patient) => {
-    if (targetPatient) {
-      setActivePatient(targetPatient);
-      setCurrentView('questionnaire');
-    } else {
-      // If no patient selected, pick the first existing patient or prompt registration
-      try {
-        const patients = await api.getPatients();
-        if (patients.length > 0) {
-          setActivePatient(patients[0]);
-          setCurrentView('questionnaire');
-        } else {
-          setCurrentView('register-patient');
-        }
-      } catch {
-        setCurrentView('register-patient');
-      }
-    }
+  /**
+   * Clears all active screening state across patient, questionnaire, and ML results
+   * Generates a new screening session token/key and navigates to fresh Patient Registration.
+   */
+  const handleStartFreshScreening = () => {
+    setActivePatient(null);
+    setActiveQuestionnaire(null);
+    setActiveScreeningResult(null);
+    setSelectedPatientId(null);
+    setScreeningSessionKey(Date.now());
+    setCurrentView('register-patient');
+  };
+
+  /**
+   * Starts a new screening specifically for an existing patient from Directory or Profile.
+   * Clears old questionnaire, frames, and ML predictions while targeting the selected patient.
+   */
+  const handleStartExistingPatientScreening = (targetPatient: Patient) => {
+    setActivePatient(targetPatient);
+    setActiveQuestionnaire(null);
+    setActiveScreeningResult(null);
+    setScreeningSessionKey(Date.now());
+    setCurrentView('questionnaire');
   };
 
   const handlePatientSaved = (newPatient: Patient, proceedToScreening: boolean) => {
@@ -86,6 +100,29 @@ export const App: React.FC = () => {
     setCurrentView('screening-result');
   };
 
+  if (currentView === 'qr-access' && qrToken) {
+    return (
+      <LanguageProvider>
+        <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900">
+          <header className="bg-white border-b border-slate-200 py-3 px-6 shadow-xs flex items-center justify-between">
+            <span className="font-black text-teal-700 tracking-tight text-lg">OA-Sense AI</span>
+            <span className="text-xs text-slate-400 font-medium">Digital Patient Pass Portal</span>
+          </header>
+          <main className="flex-1">
+            <QRAccessPage
+              token={qrToken}
+              onBack={() => {
+                window.history.pushState({}, '', '/');
+                setQrToken(null);
+                setCurrentView('dashboard');
+              }}
+            />
+          </main>
+        </div>
+      </LanguageProvider>
+    );
+  }
+
   if (!isAuthenticated) {
     return (
       <LanguageProvider>
@@ -101,27 +138,29 @@ export const App: React.FC = () => {
           currentView={currentView}
           setCurrentView={setCurrentView}
           onLogout={handleLogout}
+          onStartNewScreening={handleStartFreshScreening}
         />
 
         <main className="flex-1">
           {currentView === 'dashboard' && (
             <DashboardPage
-              onStartNewScreening={() => handleStartNewScreening()}
+              onStartNewScreening={handleStartFreshScreening}
               onSelectPatient={handleSelectPatientProfile}
-              onRegisterPatient={() => setCurrentView('register-patient')}
+              onRegisterPatient={handleStartFreshScreening}
             />
           )}
 
           {currentView === 'patients' && (
             <PatientsListPage
               onSelectPatient={handleSelectPatientProfile}
-              onRegisterPatient={() => setCurrentView('register-patient')}
-              onStartScreening={(p) => handleStartNewScreening(p)}
+              onRegisterPatient={handleStartFreshScreening}
+              onStartScreening={(p) => handleStartExistingPatientScreening(p)}
             />
           )}
 
           {currentView === 'register-patient' && (
             <PatientRegistrationPage
+              key={`reg-${screeningSessionKey}`}
               onPatientSaved={handlePatientSaved}
               onCancel={() => setCurrentView('dashboard')}
             />
@@ -129,6 +168,7 @@ export const App: React.FC = () => {
 
           {currentView === 'questionnaire' && activePatient && (
             <QuestionnairePage
+              key={`q-${screeningSessionKey}-${activePatient.id}`}
               patient={activePatient}
               onComplete={handleQuestionnaireCompleted}
               onBack={() => setCurrentView('dashboard')}
@@ -137,6 +177,7 @@ export const App: React.FC = () => {
 
           {currentView === 'movement-screening' && activePatient && activeQuestionnaire && (
             <MovementScreeningPage
+              key={`mov-${screeningSessionKey}-${activePatient.id}`}
               patient={activePatient}
               questionnaire={activeQuestionnaire}
               onScreeningFinished={handleScreeningFinished}
@@ -146,8 +187,9 @@ export const App: React.FC = () => {
 
           {currentView === 'screening-result' && activeScreeningResult && (
             <ResultDashboardPage
+              key={`res-${activeScreeningResult.id}`}
               screening={activeScreeningResult}
-              onStartNewScreening={() => handleStartNewScreening()}
+              onStartNewScreening={handleStartFreshScreening}
               onViewPatientProfile={handleSelectPatientProfile}
             />
           )}
@@ -156,7 +198,7 @@ export const App: React.FC = () => {
             <PatientProfilePage
               patientId={selectedPatientId}
               onBack={() => setCurrentView('dashboard')}
-              onStartScreening={(p) => handleStartNewScreening(p)}
+              onStartScreening={(p) => handleStartExistingPatientScreening(p)}
               onViewScreening={handleViewScreening}
             />
           )}
